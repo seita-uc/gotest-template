@@ -2,17 +2,6 @@
 {{- $f := .}}
 
 func {{.TestName}}(t *testing.T) {
-	{{- with .Receiver}}
-		{{- if .IsStruct}}
-			{{- if .Fields}}
-				type fields struct {
-				{{- range .Fields}}
-					{{Field .}} {{.Type}}
-				{{- end}}
-				}
-			{{- end}}
-		{{- end}}
-	{{- end}}
 	{{- if .TestParameters}}
 	type args struct {
 		{{- range .TestParameters}}
@@ -22,36 +11,24 @@ func {{.TestName}}(t *testing.T) {
 	{{- end}}
 	tests := []struct {
 		name string
-		{{- with .Receiver}}
-			{{- if and .IsStruct .Fields}}
-				fields fields
-			{{- else}}
-				{{Receiver .}} {{.Type}}
-			{{- end}}
-		{{- end}}
 		{{- if .TestParameters}}
 			args args
 		{{- end}}
 		{{- range .TestResults}}
 			{{Want .}} {{.Type}}
 		{{- end}}
-		{{- if .ReturnsError}}
-			wantErr bool
-		{{- end}}
+    err    error
+    before func(c *spanner.Client)
+    after  func(c *spanner.Client)
 	}{
 		// TODO: Add test cases.
 	}
 	for {{if (or .Subtests (not .IsNaked))}} _, tt := {{end}} range tests {
         {{- if .Subtests }}t.Run(tt.name, func(t *testing.T) { {{- end -}}
-			{{- with .Receiver}}
-				{{- if .IsStruct}}
-					{{Receiver .}} := {{if .Type.IsStar}}&{{end}}{{.Type.Value}}{
-					{{- range .Fields}}
-						{{.Name}}: tt.fields.{{Field .}},
-					{{- end}}
-					}
-				{{- end}}
-			{{- end}}
+          c, s := newClients(t)
+          tt.before(c)
+          defer tt.after(c)
+
 			{{- range .Parameters}}
 				{{- if .IsWriter}}
 					{{Param .}} := &bytes.Buffer{}
@@ -61,23 +38,26 @@ func {{.TestName}}(t *testing.T) {
 				{{template "results" $f}} {{template "call" $f}}
 			{{- end}}
 			{{- if .ReturnsError}}
-				if {{if .OnlyReturnsError}} err := {{template "call" $f}}; {{end}} (err != nil) != tt.wantErr {
-					t.Errorf("{{template "message" $f}} error = %v, wantErr %v", {{template "inputs" $f}} err, tt.wantErr)
-					{{- if .TestResults}}
-						{{if .Subtests }}return{{else}}continue{{end}}
-					{{- end}}
+				if {{if .OnlyReturnsError}} err := {{template "call" $f}}; {{end}} tt.err != nil && err != nil {
+          assert.Cmp(t, tt.err.Error(), err.Error())
+        } else {
+          assert.CmpErr(t, tt.err, err)
 				}
 			{{- end}}
-			{{- range .TestResults}}
+      {{- range .TestResults}}
 				{{- if .IsWriter}}
 					if {{Got .}} := {{Param .}}.String(); {{Got .}} != tt.{{Want .}} {
 				{{- else if .IsBasicType}}
-					if {{if $f.OnlyReturnsOneValue}}{{Got .}} := {{template "inline" $f}}; {{end}} {{Got .}} != tt.{{Want .}} {
+					if {{if $f.OnlyReturnsOneValue}}{{Got .}} := {{template "inline" $f}}; {{end}} {{Got .}} != nil {
+            assert.Cmp(t, tt.want, got, cmpopts.IgnoreFields(*got, ""))
+          } else {
+            assert.Cmp(t, tt.want, got)
 				{{- else}}
-					if {{if $f.OnlyReturnsOneValue}}{{Got .}} := {{template "inline" $f}}; {{end}} !cmp.Equal({{Got .}}, tt.{{Want .}}) {
+					if {{if $f.OnlyReturnsOneValue}}{{Got .}} := {{template "inline" $f}}; {{end}} {{Got .}} != nil {
+            assert.Cmp(t, tt.want, got, cmpopts.IgnoreFields(*got, ""))
+          } else {
+            assert.Cmp(t, tt.want, got)
 				{{- end}}
-				t.Errorf("{{template "message" $f}} {{if $f.ReturnsMultiple}}{{Got .}} {{end}}= %v, want %v{{ if (not ( or .IsWriter .IsBasicType))}}\ndiff=%v{{ end }}", {{template "inputs" $f}} {{Got .}}, tt.{{Want .}}
-				    {{- if (not ( or .IsWriter .IsBasicType))}}, cmp.Diff({{Got .}}, tt.{{Want .}}){{ end }})
 				}
 			{{- end}}
 		{{- if .Subtests }} }) {{- end -}}
